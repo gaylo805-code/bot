@@ -5,7 +5,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from src.asr.srt_utils import SimpleSegment, clean_srt, extract_audio, segments_to_srt
+from src.asr.srt_utils import (
+    SimpleSegment,
+    clean_srt,
+    collapse_repeated_text,
+    extract_audio,
+    segments_to_srt,
+    suppress_repeated_segments,
+)
 
 
 def _make_video(path: Path, seconds: float = 2.0) -> Path:
@@ -56,3 +63,30 @@ def test_clean_srt_fixes_overlap():
             SimpleSegment(idx=1, start=1.5, end=3.0, text="b")]
     out = clean_srt(segs, merge_gap=0.0)
     assert out[1].start >= out[0].end
+
+
+def test_collapse_repeated_text():
+    # Whisper loops on music intros; keep one copy of a 3x-repeated phrase.
+    text = "Cá đù. Cá đù. Cá đù. Cá chép."
+    assert collapse_repeated_text(text) == "Cá đù. Cá chép."
+
+
+def test_collapse_repeated_text_keeps_two_repeats():
+    # Two repeats is legitimate speech, not a decoder loop.
+    text = "Ừm. Ừm. Rồi sao?"
+    assert collapse_repeated_text(text) == "Ừm. Ừm. Rồi sao?"
+
+
+def test_suppress_repeated_segments_blanks_extras():
+    segments = [
+        SimpleSegment(idx=0, start=0.0, end=1.0, text="Đúng rồi"),
+        SimpleSegment(idx=1, start=1.0, end=2.0, text="Đúng rồi!"),
+        SimpleSegment(idx=2, start=2.0, end=3.0, text="Đúng rồi."),
+        SimpleSegment(idx=3, start=3.0, end=4.0, text="Kết thúc"),
+    ]
+    suppress_repeated_segments(segments)
+    # Timings are kept so the rest of the timeline stays aligned.
+    assert [segment.text for segment in segments] == [
+        "Đúng rồi", "", "", "Kết thúc",
+    ]
+    assert segments[2].start == 2.0 and segments[2].end == 3.0

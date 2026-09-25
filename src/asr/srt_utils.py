@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,62 @@ class SimpleSegment:
     text: str
     language: str = ""
     translated: str = ""
+
+
+def _repeat_key(text: str) -> str:
+    """Normalize text for detecting repeated ASR phrases."""
+    return re.sub(r"[^\wÀ-ỹ]+", "", text.casefold(), flags=re.UNICODE)
+
+
+def collapse_repeated_text(text: str, min_repeats: int = 3) -> str:
+    """Collapse adjacent repeated phrases produced by ASR hallucination."""
+    tokens = (text or "").split()
+    if len(tokens) < min_repeats:
+        return text
+    output: list[str] = []
+    index = 0
+    while index < len(tokens):
+        matched = False
+        max_size = min(12, (len(tokens) - index) // min_repeats)
+        for size in range(1, max_size + 1):
+            phrase = tokens[index:index + size]
+            key = _repeat_key(" ".join(phrase))
+            if not key:
+                continue
+            next_index = index + size
+            repeats = 1
+            while next_index + size <= len(tokens):
+                candidate = tokens[next_index:next_index + size]
+                if _repeat_key(" ".join(candidate)) != key:
+                    break
+                repeats += 1
+                next_index += size
+            if repeats >= min_repeats:
+                output.extend(phrase)
+                index = next_index
+                matched = True
+                break
+        if not matched:
+            output.append(tokens[index])
+            index += 1
+    return " ".join(output)
+
+
+def suppress_repeated_segments(
+    segments: list[SimpleSegment], min_repeats: int = 3
+) -> list[SimpleSegment]:
+    """Blank three-plus consecutive identical segments, keeping timestamps."""
+    index = 0
+    while index < len(segments):
+        key = _repeat_key(segments[index].text)
+        end = index + 1
+        while end < len(segments) and _repeat_key(segments[end].text) == key:
+            end += 1
+        if key and end - index >= min_repeats:
+            for repeated in segments[index + 1:end]:
+                repeated.text = ""
+        index = end
+    return segments
 
 
 def extract_audio(video_path: str | Path, wav_path: str | Path) -> Path:

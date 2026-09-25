@@ -8,7 +8,13 @@ from typing import Any
 
 from loguru import logger
 
-from src.asr.srt_utils import SimpleSegment, clean_srt, extract_audio
+from src.asr.srt_utils import (
+    SimpleSegment,
+    clean_srt,
+    collapse_repeated_text,
+    extract_audio,
+    suppress_repeated_segments,
+)
 from src.config import get_settings
 
 
@@ -97,6 +103,11 @@ class WhisperEngine:
             language=language,
             beam_size=self.beam_size,
             temperature=0.0,
+            # Do not let a previous hallucinated phrase become context for
+            # the next decoding window; this is a common source of loops.
+            condition_on_previous_text=False,
+            max_initial_timestamp=0.0,
+            hallucination_silence_threshold=2.0,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
         )
@@ -124,7 +135,15 @@ class WhisperEngine:
                     on_progress(round(min(100.0, float(s.end) / total_dur * 100.0), 1))
                 else:
                     on_progress(100.0)
-        cleaned = clean_srt(raw)
+        # Suppress pathological decoder loops before translation/TTS. Empty
+        # timed segments are retained so the rest of the timeline stays aligned.
+        for segment in raw:
+            segment.text = collapse_repeated_text(segment.text)
+        suppress_repeated_segments(raw)
+        # Keep Whisper's natural timing boundaries. Merging every short gap
+        # into one multi-minute TTS request makes the voice sound stretched
+        # and lets one bad phrase poison the entire video.
+        cleaned = clean_srt(raw, merge_gap=0.0)
         if on_progress:
             on_progress(100.0)
         try:

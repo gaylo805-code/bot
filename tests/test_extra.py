@@ -29,9 +29,10 @@ def test_whisper_transcribe_mocked(tmp_path: Path):
               return_value=tmp_path / "x.wav"):
         out = eng.transcribe(video,
                              on_progress=progress.append)
-    # gap 0.1 < 0.2 -> merged into 1
-    assert len(out) == 1
-    assert "Hello" in out[0].text and "world" in out[0].text
+    # merge_gap=0.0 keeps Whisper's natural boundaries; merging every short
+    # gap would batch minutes of speech into one TTS request.
+    assert len(out) == 2
+    assert out[0].text == "Hello" and out[1].text == "world"
     assert progress and progress[-1] == 100.0
 
 
