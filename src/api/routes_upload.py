@@ -61,8 +61,50 @@ def _get_platform_extractor_args(platform: str) -> str:
     return args.get(platform, "default")
 
 
-def _download_url(url: str) -> tuple[str, str]:
-    """Download a video from Facebook/TikTok using yt-dlp. Returns (filepath, filename)."""
+# Height caps for the `quality` field. "best" keeps the previous behaviour
+# (highest available), which produced 145 MB for a 9-minute clip and made
+# playback through the tunnel buffer constantly.
+QUALITY_HEIGHTS = {"360": 360, "480": 480, "720": 720, "1080": 1080}
+QUALITY_CHOICES = ["360", "480", "720", "1080", "best"]
+
+
+def _build_format_strategies(quality: str) -> list[list[str]]:
+    """Build yt-dlp ``-f`` strategies for the requested height cap.
+
+    Args:
+        quality: one of QUALITY_CHOICES, or "" / anything unknown for best.
+
+    Returns:
+        List of argument lists, tried in order until one succeeds.
+    """
+    height = QUALITY_HEIGHTS.get(str(quality or "").strip().lower())
+    if not height:
+        return [
+            ["-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+             "--merge-output-format", "mp4",
+             "--abort-on-unavailable-fragments"],
+            ["-f", "best"],
+        ]
+    cap = f"[height<={height}]"
+    return [
+        ["-f", (f"bestvideo{cap}[ext=mp4]+bestaudio[ext=m4a]"
+                f"/bestvideo{cap}+bestaudio/best{cap}"),
+         "--merge-output-format", "mp4",
+         "--abort-on-unavailable-fragments"],
+        ["-f", f"best{cap}", "--merge-output-format", "mp4"],
+    ]
+
+
+def _download_url(url: str, quality: str = "best") -> tuple[str, str]:
+    """Download a video from Facebook/TikTok using yt-dlp. Returns (filepath, filename).
+
+    Args:
+        url: Facebook/TikTok link.
+        quality: height cap key from QUALITY_CHOICES, or "best".
+
+    Returns:
+        Tuple of (downloaded path, filename).
+    """
     settings = get_settings()
     settings.ensure_dirs()
     platform = detect_platform(url)
@@ -79,12 +121,7 @@ def _download_url(url: str) -> tuple[str, str]:
     extractor_args = _get_platform_extractor_args(platform)
 
     # Try multiple format strategies.
-    format_strategies = [
-        ["-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-         "--merge-output-format", "mp4",
-         "--abort-on-unavailable-fragments"],
-        ["-f", "best"],
-    ]
+    format_strategies = _build_format_strategies(quality)
 
     for strategy in format_strategies:
         cmd = [yt_dlp] + strategy + [
@@ -211,8 +248,12 @@ async def upload_from_url(
     keep_background: bool = Form(default=False),
     burn_subs: bool = Form(default=False),
     lipsync: bool = Form(default=True),
+    quality: str = Form(default="best"),
 ) -> JobCreateResponse:
     """Download a video from Facebook/TikTok via yt-dlp, create Job, dispatch Celery.
+
+    Args:
+        quality: one of QUALITY_CHOICES ("360".."1080") or "best".
 
     Returns:
         JobCreateResponse with job_id for polling.
@@ -229,7 +270,7 @@ async def upload_from_url(
         )
 
     # Download video.
-    video_path, filename = _download_url(url)
+    video_path, filename = _download_url(url, quality)
     if not filename:
         filename = f"{platform}_video.mp4"
 

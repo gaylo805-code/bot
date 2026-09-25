@@ -152,3 +152,26 @@ def test_pipeline_task_mocked(monkeypatch, tmp_path: Path):
     # inside _asr_cb is guarded, and all heavy steps are mocked above.
     res = tasks_mod.process_dubbing_job.run(job_id, video)
     assert isinstance(res, str)
+
+
+def test_build_format_strategies_height_cap():
+    """`quality` must cap the downloaded height, not just append a no-op filter."""
+    from src.api.routes_upload import _build_format_strategies
+
+    strategies = _build_format_strategies("720")
+    fmt = strategies[0][strategies[0].index("-f") + 1]
+    assert "[height<=720]" in fmt, fmt
+    assert "[height<=1080]" not in fmt
+    # The unfiltered fallback must not sneak an uncapped best back in.
+    assert "bestvideo[ext=mp4]" not in fmt
+    assert len(strategies) == 2
+
+
+def test_build_format_strategies_best_uncapped():
+    from src.api.routes_upload import _build_format_strategies
+
+    for value in ("best", "", "nonsense", None):
+        strategies = _build_format_strategies(value)  # type: ignore[arg-type]
+        fmt = strategies[0][strategies[0].index("-f") + 1]
+        assert "height<=" not in fmt, (value, fmt)
+        assert "bestvideo[ext=mp4]" in fmt, (value, fmt)

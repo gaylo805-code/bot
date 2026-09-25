@@ -4,7 +4,7 @@ Run:
     uv run python -m src.bot.discord_bot        # needs DISCORD_BOT_TOKEN
 
 Slash commands:
-    /dub <video> [url] [source_lang] [voice_id] [keep_background] [phu_de] - lồng tiếng
+    /dub <video> [url] [source_lang] [voice_id] [keep_background] [phu_de] [chat_luong] - lồng tiếng
     /status <job_id>  - xem tiến trình 1 job (+ transcript)
     /jobs             - 5 job mới nhất
     /srt <job_id>     - tải phụ đề .srt
@@ -50,7 +50,19 @@ from src.bot.helpers import (
     validate_attachment,
 )
 from src.config import get_settings
+from src.api.routes_upload import QUALITY_CHOICES as QUALITY_VALUES
 from src.api.routes_upload import detect_platform
+
+QUALITY_LABELS = {
+    "360": "📉 360p - nhẹ nhất, xem nhanh",
+    "480": "📊 480p - nhẹ",
+    "720": "📺 720p - mặc định, khuyên dùng",
+    "1080": "📽️ 1080p - rõ",
+    "best": "💎 Cao nhất - file nặng, xem hay bị lag",
+}
+QUALITY_CHOICES = [
+    app_commands.Choice(name=QUALITY_LABELS[v], value=v) for v in QUALITY_VALUES
+]
 
 SOURCE_CHOICES = [
     app_commands.Choice(name="🌐 Tự động nhận diện", value="auto"),
@@ -319,8 +331,9 @@ def _final_embed(info: dict, snippet: str) -> discord.Embed:
     keep_background="Giữ nhạc nền gốc ở volume nhỏ",
     phu_de="Burn phụ đề Việt vào video",
     khop_moi="Khớp môi Wav2Lip + làm nét mặt GFPGAN",
+    chat_luong="Chất lượng video tải về (chỉ dùng khi gửi link)",
 )
-@app_commands.choices(source_lang=SOURCE_CHOICES)
+@app_commands.choices(source_lang=SOURCE_CHOICES, chat_luong=QUALITY_CHOICES)
 async def dub_cmd(
     interaction: discord.Interaction,
     video: discord.Attachment = None,
@@ -330,6 +343,7 @@ async def dub_cmd(
     keep_background: bool = False,
     phu_de: bool = False,
     khop_moi: bool = True,
+    chat_luong: str = "720",
 ) -> None:
     """Upload a video file or supported Facebook/TikTok URL."""
     bot = interaction.client  # type: ignore[assignment]
@@ -362,7 +376,7 @@ async def dub_cmd(
             created = await asyncio.to_thread(
                 bot.api.upload_from_url,
                 url.strip(), src, "vi", voice_id.strip(),
-                keep_background, phu_de, khop_moi,
+                keep_background, phu_de, khop_moi, chat_luong,
             )
         else:
             if not video:
@@ -678,6 +692,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         value=(
             "`/dub <video>` — lồng tiếng từ file đính kèm\n"
             "`/dub url=<link>` — lồng tiếng từ Facebook / TikTok\n"
+            "　└ `chat_luong:` 360 / 480 / **720 (mặc định)** / 1080 / best\n"
             "`/status <job_id>` — tiến trình + transcript\n"
             "`/jobs` — 5 job mới nhất\n"
             "`/srt <job_id>` — tải phụ đề .srt\n"

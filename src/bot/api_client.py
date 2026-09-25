@@ -196,9 +196,17 @@ class DubbingAPI:
         keep_background: bool = False,
         burn_subs: bool = False,
         lipsync: bool = True,
+        quality: str = "best",
     ) -> dict:
-        """POST /api/upload/url -> download a supported social video, create job."""
-        logger.info(f"Bot uploading from social URL: {url}")
+        """POST /api/upload/url -> download a supported social video, create job.
+
+        Args:
+            quality: height cap for yt-dlp ("360", "480", "720", "1080", "best").
+
+        Returns:
+            JobCreateResponse dict.
+        """
+        logger.info(f"Bot uploading from social URL: {url} (quality={quality})")
         with httpx.Client(timeout=self.timeout_upload) as client:
             resp = client.post(
                 f"{self.base_url}/api/upload/url",
@@ -210,6 +218,7 @@ class DubbingAPI:
                     "keep_background": str(bool(keep_background)).lower(),
                     "burn_subs": str(bool(burn_subs)).lower(),
                     "lipsync": str(bool(lipsync)).lower(),
+                    "quality": quality or "best",
                 },
                 headers=self._headers(),
             )
