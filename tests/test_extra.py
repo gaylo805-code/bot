@@ -164,7 +164,6 @@ def test_build_format_strategies_height_cap():
     assert "[height<=1080]" not in fmt
     # The unfiltered fallback must not sneak an uncapped best back in.
     assert "bestvideo[ext=mp4]" not in fmt
-    assert len(strategies) == 2
 
 
 def test_build_format_strategies_best_uncapped():
@@ -175,3 +174,35 @@ def test_build_format_strategies_best_uncapped():
         fmt = strategies[0][strategies[0].index("-f") + 1]
         assert "height<=" not in fmt, (value, fmt)
         assert "bestvideo[ext=mp4]" in fmt, (value, fmt)
+
+
+def test_capped_quality_keeps_an_uncapped_fallback():
+    """A low quality request must never be able to hard-fail the job.
+
+    Facebook often serves one progressive stream. A strictly-capped
+    selector matches nothing and yt-dlp exits "Requested format is not
+    available", which surfaced as a 400 for a perfectly downloadable
+    video.
+    """
+    from src.api.routes_upload import _build_format_strategies
+
+    strategies = _build_format_strategies("360")
+    assert len(strategies) == 4, "capped path must keep the uncapped safety net"
+
+    def fmt(entry):
+        return entry[entry.index("-f") + 1]
+
+    assert "[height<=360]" in fmt(strategies[0])
+    assert "[height<=360]" in fmt(strategies[1])
+    # The tail must be able to select a format above the cap.
+    for entry in strategies[2:]:
+        assert "height<=" not in fmt(entry), fmt(entry)
+    assert fmt(strategies[-1]) == "best"
+
+
+def test_best_quality_still_uses_two_strategies():
+    from src.api.routes_upload import _build_format_strategies
+
+    strategies = _build_format_strategies("best")
+    assert len(strategies) == 2
+    assert strategies[-1][strategies[-1].index("-f") + 1] == "best"

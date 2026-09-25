@@ -71,20 +71,29 @@ QUALITY_CHOICES = ["360", "480", "720", "1080", "best"]
 def _build_format_strategies(quality: str) -> list[list[str]]:
     """Build yt-dlp ``-f`` strategies for the requested height cap.
 
+    The cap is a *preference*, never a hard requirement. Facebook often
+    publishes a single progressive stream, so a strictly-capped selector
+    matches nothing and yt-dlp exits with "Requested format is not
+    available" - surfacing as a 400 even though the video downloads fine.
+    The last two entries deliberately ignore the cap so a lower-quality
+    request can never make a job impossible.
+
     Args:
         quality: one of QUALITY_CHOICES, or "" / anything unknown for best.
 
     Returns:
-        List of argument lists, tried in order until one succeeds.
+        List of argument lists, tried in order until one succeeds. Entries
+        from index 2 on are the uncapped safety net.
     """
+    uncapped = [
+        ["-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+         "--merge-output-format", "mp4",
+         "--abort-on-unavailable-fragments"],
+        ["-f", "best"],
+    ]
     height = QUALITY_HEIGHTS.get(str(quality or "").strip().lower())
     if not height:
-        return [
-            ["-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-             "--merge-output-format", "mp4",
-             "--abort-on-unavailable-fragments"],
-            ["-f", "best"],
-        ]
+        return uncapped
     cap = f"[height<={height}]"
     return [
         ["-f", (f"bestvideo{cap}[ext=mp4]+bestaudio[ext=m4a]"
@@ -92,6 +101,7 @@ def _build_format_strategies(quality: str) -> list[list[str]]:
          "--merge-output-format", "mp4",
          "--abort-on-unavailable-fragments"],
         ["-f", f"best{cap}", "--merge-output-format", "mp4"],
+        *uncapped,
     ]
 
 
@@ -123,7 +133,8 @@ def _download_url(url: str, quality: str = "best") -> tuple[str, str]:
     # Try multiple format strategies.
     format_strategies = _build_format_strategies(quality)
 
-    for strategy in format_strategies:
+    wanted = str(quality or "best")
+    for idx, strategy in enumerate(format_strategies):
         cmd = [yt_dlp] + strategy + [
             "-o", str(dest_dir / "%(id)s.%(ext)s"),
             "--no-playlist",
@@ -133,15 +144,21 @@ def _download_url(url: str, quality: str = "best") -> tuple[str, str]:
             url,
         ]
 
-        logger.info(f"[{platform.upper()}] yt-dlp attempt: {' '.join(cmd)}")
+        logger.info(f"[{platform.upper()}] yt-dlp attempt {idx + 1}"
+                    f"/{len(format_strategies)}: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
         if result.returncode == 0:
             logger.info(f"[{platform.upper()}] Downloaded: {url} ✓")
+            if idx >= 2 and wanted in QUALITY_HEIGHTS:
+                logger.warning(
+                    f"[{platform.upper()}] Khong co ban <= {wanted}p cho video nay, "
+                    f"da tai ban cao nhat. File se lon hon va xem cham hon."
+                )
             break
 
         err = result.stderr.strip()[-300:]
-        logger.warning(f"[{platform.upper()}] Attempt failed: {err}")
+        logger.warning(f"[{platform.upper()}] Attempt {idx + 1} failed: {err}")
 
         if strategy is format_strategies[-1]:
             raise HTTPException(
