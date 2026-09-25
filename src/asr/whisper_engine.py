@@ -106,10 +106,13 @@ class WhisperEngine:
             f"(prob={getattr(info, 'language_probability', 0):.2f})"
         )
         raw: list[SimpleSegment] = []
-        # Materialize generator to count progress; segments carry start/end.
-        collected = list(seg_iter)
-        total = len(collected) if collected else 1
-        for i, s in enumerate(collected):
+        # Stream the generator so on_progress fires while transcribing.
+        # Buffering it into a list first (to count segments) left the job
+        # pinned at 1% for the whole ASR stage - on a 10-minute video that
+        # is a silent 15+ minutes. Segment end times are in the original
+        # audio timeline, so they scale against info.duration.
+        total_dur = float(getattr(info, "duration", 0.0) or 0.0)
+        for i, s in enumerate(seg_iter):
             raw.append(
                 SimpleSegment(
                     idx=i, start=float(s.start), end=float(s.end),
@@ -117,7 +120,10 @@ class WhisperEngine:
                 )
             )
             if on_progress:
-                on_progress(round((i + 1) / total * 100, 1))
+                if total_dur > 0:
+                    on_progress(round(min(100.0, float(s.end) / total_dur * 100.0), 1))
+                else:
+                    on_progress(100.0)
         cleaned = clean_srt(raw)
         if on_progress:
             on_progress(100.0)
