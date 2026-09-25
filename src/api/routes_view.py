@@ -128,5 +128,5 @@ def stream_job(job_id: str):
         output_path,
         media_type="video/mp4",
         filename=f"{job_id}_dubbed_vi.mp4",
-        headers={{"Accept-Ranges": "bytes"}},
+        headers={"Accept-Ranges": "bytes"},
     )
