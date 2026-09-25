@@ -1,0 +1,42 @@
+# Secrets - NEVER commit
+.env
+*.db
+*.sqlite
+*.sqlite3
+storage/cookies.txt
+
+# Heavy binaries (>GitHub 100MB limit, re-download via scripts/)
+models/*.pth
+models/*.pt
+models/*.bin
+third_party/
+*.mp4
+*.mp3
+*.wav
+
+# Runtime artifacts
+storage/uploads/*
+storage/outputs/*
+storage/tmp/*
+!storage/uploads/.gitkeep
+!storage/outputs/.gitkeep
+!storage/tmp/.gitkeep
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Local model caches (re-downloaded by setup scripts)
+gfpgan/
+facexlib/

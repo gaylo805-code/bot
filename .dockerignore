@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+storage/uploads/*
+storage/outputs/*
+storage/tmp/*
+!storage/uploads/.gitkeep
+!storage/outputs/.gitkeep
+!storage/tmp/.gitkeep
+models/*
+!models/.gitkeep
+*.db
+.pytest_cache/
+.coverage
+htmlcov/
