@@ -33,10 +33,10 @@ def test_resolve_voice_aliases():
 
 
 class _FakeCommunicate:
-    seen: list[tuple[str, str]] = []
+    seen: list[tuple[str, str, str]] = []
 
-    def __init__(self, text: str, voice: str):
-        _FakeCommunicate.seen.append((text, voice))
+    def __init__(self, text: str, voice: str, *, rate: str = "+0%", **_kwargs):
+        _FakeCommunicate.seen.append((text, voice, rate))
 
     async def save(self, dest: str) -> None:
         Path(dest).write_bytes(b"FAKEEDGE" * 100)
@@ -56,18 +56,20 @@ def test_edge_synthesize_single_chunk(tmp_path: Path, _fake_edge):
     out = tmp_path / "a.mp3"
     res = client.synthesize("Xin chào", voice_id="", output_path=out)
     assert res.exists() and res.stat().st_size > 0
-    text_sent, voice_sent = _FakeCommunicate.seen[0]
+    text_sent, voice_sent, rate_sent = _FakeCommunicate.seen[0]
+    assert text_sent == "Xin chào"
+    assert "<speak" not in text_sent and "prosody" not in text_sent
     assert voice_sent == "vi-VN-NamMinhNeural"
-    assert "Xin chào" in text_sent and "prosody" in text_sent
+    assert rate_sent == "+0%"
 
 
 def test_edge_synthesize_voice_override(tmp_path: Path, _fake_edge):
     client = EdgeTTSClient()
     out = tmp_path / "b.mp3"
     client.synthesize("Chào", voice_id="male", output_path=out)
-    text_sent, voice_sent = _FakeCommunicate.seen[0]
+    text_sent, voice_sent, _rate_sent = _FakeCommunicate.seen[0]
+    assert text_sent == "Chào"
     assert voice_sent == "vi-VN-NamMinhNeural"
-    assert "Chào" in text_sent
 
 
 def test_edge_synthesize_empty_raises(tmp_path: Path, _fake_edge):
@@ -89,7 +91,7 @@ def test_edge_synthesize_multi_chunk_concats(tmp_path: Path, monkeypatch):
     blob = sample.read_bytes()
 
     class _RealMp3:
-        def __init__(self, text: str, voice: str):
+        def __init__(self, text: str, voice: str, *, rate: str = "+0%", **_kwargs):
             pass
 
         async def save(self, dest: str) -> None:

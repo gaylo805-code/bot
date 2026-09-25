@@ -120,14 +120,18 @@ class EdgeTTSClient:
         chunks = split_for_edge(text)
         logger.info(f"Edge-TTS {len(text)} chars voice={voice} "
                     f"rate={self.rate} ({len(chunks)} chunk(s))")
-        ssml_chunks = [self.to_ssml(c, voice) for c in chunks]
-        if len(ssml_chunks) == 1:
-            asyncio.run(self._save(edge_tts, ssml_chunks[0], voice, output_path))
+        # edge-tts builds the SSML envelope itself. Passing our own SSML
+        # string here makes it escape and speak the XML header literally
+        # ("speak version ... www.w3.org ..."), which is not an audible dub.
+        if len(chunks) == 1:
+            asyncio.run(
+                self._save(edge_tts, chunks[0], voice, output_path, self.rate)
+            )
         else:
             parts = [output_path.with_name(f"{output_path.stem}_p{i}.mp3")
                      for i in range(len(chunks))]
-            for chunk, part in zip(ssml_chunks, parts):
-                asyncio.run(self._save(edge_tts, chunk, voice, part))
+            for chunk, part in zip(chunks, parts):
+                asyncio.run(self._save(edge_tts, chunk, voice, part, self.rate))
             self._concat(parts, output_path)
             for p in parts:
                 p.unlink(missing_ok=True)
@@ -156,9 +160,11 @@ class EdgeTTSClient:
         )
 
     @staticmethod
-    async def _save(module, text: str, voice: str, dest: Path) -> None:
+    async def _save(
+        module, text: str, voice: str, dest: Path, rate: str = "+0%"
+    ) -> None:
         """Single edge-tts request (module injected for testability)."""
-        await module.Communicate(text, voice).save(str(dest))
+        await module.Communicate(text, voice, rate=rate).save(str(dest))
 
     @staticmethod
     def _concat(parts: list[Path], dest: Path) -> None:
