@@ -19,7 +19,11 @@ from pathlib import Path
 from loguru import logger
 
 from src.config import get_settings
-from src.video.ffmpeg_utils import run_ffmpeg
+from src.video.ffmpeg_utils import (
+    SYNC_TOLERANCE_S,
+    probe_stream_durations,
+    run_ffmpeg,
+)
 
 GFPGAN_RELEASE_URL = (
     "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth"
@@ -143,6 +147,53 @@ def has_face(
         return hits >= min_hits
     finally:
         cap.release()
+
+
+# -- A/V sync verification ---------------------------------------------------
+def av_sync_drift(path: str | Path) -> float:
+    """Absolute difference between video and audio duration, in seconds.
+
+    This is the check that catches lip-sync drift. Mouth motion is driven
+    frame-by-frame from the dubbed audio, so any length mismatch between
+    the two streams shows up as the lips pulling away from the voice over
+    the length of the clip.
+
+    Args:
+        path: media file to probe.
+
+    Returns:
+        abs(video_duration - audio_duration). 0.0 when a stream is missing.
+    """
+    d = probe_stream_durations(path)
+    return abs(d["video"] - d["audio"])
+
+
+def verify_av_sync(
+    path: str | Path, tolerance: float = SYNC_TOLERANCE_S
+) -> tuple[bool, float]:
+    """Probe a file and report whether audio and video line up.
+
+    Args:
+        path: media file to probe.
+        tolerance: max acceptable drift in seconds.
+
+    Returns:
+        (ok, drift_seconds).
+    """
+    try:
+        drift = av_sync_drift(path)
+    except Exception as exc:  # noqa: BLE001 - probe failure is not a pass
+        logger.warning(f"A/V sync probe failed for {Path(path).name}: {exc}")
+        return False, float("inf")
+    ok = drift <= tolerance
+    if not ok:
+        logger.error(
+            f"A/V DRIFT {drift:.3f}s (tol {tolerance}s) in {Path(path).name} - "
+            f"audio and video lengths disagree, lips will pull away from audio"
+        )
+    else:
+        logger.info(f"A/V sync OK ({drift:.3f}s) in {Path(path).name}")
+    return ok, drift
 
 
 # -- Wav2Lip (subprocess, isolated deps) ------------------------------------
@@ -279,6 +330,7 @@ def run_gfpgan(
     video_in: str | Path,
     video_out: str | Path,
     device: str = "cuda",
+    audio_from: str | Path | None = None,
 ) -> Path:
     """Restore every frame with GFPGAN, keep original size + audio.
 
@@ -286,6 +338,11 @@ def run_gfpgan(
         video_in: lip-synced video (face may be soft).
         video_out: sharpened destination.
         device: 'cuda' (L4) or 'cpu'.
+        audio_from: source of the audio track. Must be the Wav2Lip-muxed
+            file, not an upstream merged video: Wav2Lip drives the mouth
+            from the clean dubbed wav, so re-attaching audio from a
+            re-mixed track plays it back against motion that was never
+            generated for it. Defaults to ``video_in``.
 
     Returns:
         Path to restored video.
@@ -339,10 +396,15 @@ def run_gfpgan(
     logger.info(f"GFPGAN enhanced {enhanced}/{frames} frames")
     if frames == 0 or not silent.exists():
         raise RuntimeError("GFPGAN produced no frames")
-    # Re-attach original audio (frame loop is video-only).
+    # Re-attach audio (frame loop is video-only) from the Wav2Lip-muxed
+    # file, which carries the exact track the mouth motion was built from.
+    audio_src = Path(audio_from) if audio_from else video_in
+    # Re-encode rather than copy: the restored frames come out of OpenCV
+    # with a timebase that need not match, and a copied stream keeps the
+    # mismatch.
     run_ffmpeg([
         "ffmpeg", "-y", "-v", "error",
-        "-i", str(silent), "-i", str(video_in),
+        "-i", str(silent), "-i", str(audio_src),
         "-map", "0:v:0", "-map", "1:a:0?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-shortest", str(video_out),
@@ -418,13 +480,20 @@ def post_process_lipsync(
 
     if not settings.gfpgan_enabled:
         lip_muxed.replace(out)
+        verify_av_sync(out)
         return out
     try:
-        return run_gfpgan(lip_muxed, out)
+        # audio_from is lip_muxed explicitly: the mouth motion was driven
+        # by `wav`, and lip_muxed is the only artifact that still carries
+        # that exact track.
+        result = run_gfpgan(lip_muxed, out, audio_from=lip_muxed)
     except Exception as exc:  # noqa: BLE001 - soft face beats no video
         logger.error(f"GFPGAN failed, keeping Wav2Lip output: {exc}")
         try:
             lip_muxed.replace(out)
         except OSError:
             return merged
+        verify_av_sync(out)
         return out
+    verify_av_sync(result)
+    return result

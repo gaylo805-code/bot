@@ -8,7 +8,11 @@ from pathlib import Path
 
 from loguru import logger
 
-from src.video.ffmpeg_utils import run_ffmpeg
+from src.video.ffmpeg_utils import (
+    SYNC_TOLERANCE_S,
+    probe_duration,
+    run_ffmpeg,
+)
 
 
 def _has_audio_stream(video: Path) -> bool:
@@ -112,10 +116,22 @@ def merge_dubbed_video(
     if not keep_background or not _has_audio_stream(video_path):
         if keep_background:
             logger.warning("No source audio stream; merging dub only")
+        # `-c:v copy` cannot cut a stream mid-GOP, so `-shortest` only ends
+        # the video at the NEXT keyframe. On the AV1 sources Facebook serves
+        # that overshot by 36s on a 13-minute clip: audio stopped at 754s
+        # while video ran to 790s, so the lips pulled away from the voice.
+        # When the dub is shorter than the video, re-encode so the trim is
+        # frame-exact; otherwise keep the cheap copy.
+        need_trim = _needs_reencode_for_trim(video_path, dubbed_audio_path)
+        if need_trim:
+            logger.info("Dub shorter than video: re-encoding video so the "
+                        "trim is frame-exact (-c:v copy cannot cut mid-GOP)")
         run_ffmpeg([
             "ffmpeg", "-y", "-v", "error",
             "-i", str(video_path), "-i", str(dubbed_audio_path),
-            "-c:v", "copy", "-c:a", "aac",
+            *(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+              if need_trim else ["-c:v", "copy"]),
+            "-c:a", "aac",
             "-map", "0:v:0", "-map", "1:a:0",
             "-shortest", str(merged),
         ])
@@ -175,6 +191,28 @@ def merge_dubbed_video(
     except OSError:
         pass
     return _maybe_burn(merged, output_path, burn_subs, subs_srt)
+
+
+def _needs_reencode_for_trim(video: Path, dub: Path) -> bool:
+    """True when the dub is short enough that stream copy would overshoot.
+
+    Args:
+        video: source video path.
+        dub: dubbed audio that defines the target duration.
+
+    Returns:
+        True if the two lengths differ by more than the sync tolerance.
+    """
+    try:
+        v = probe_duration(video)
+        a = probe_duration(dub)
+    except Exception as exc:  # noqa: BLE001 - probe failure: keep the copy
+        logger.warning(f"Duration probe failed, keeping -c:v copy: {exc}")
+        return False
+    if v - a > SYNC_TOLERANCE_S:
+        logger.info(f"video {v:.2f}s vs dub {a:.2f}s (diff {v - a:.2f}s)")
+        return True
+    return False
 
 
 def _maybe_burn(
